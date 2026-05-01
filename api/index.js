@@ -1,5 +1,7 @@
-// api/index.js - ✅ YTDL SIN FS + SIN COOKIES + SIN EROFS
-import ytdl from 'ytdl-core-enhanced';
+// api/index.js - ✅ YT-DLP: Serverless perfecto
+import YTDlpWrap from 'yt-dlp-wrap';
+
+const ytDlpWrap = new YTDlpWrap();
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,56 +19,54 @@ export default async function handler(req, res) {
     if (!url) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Requiere ?url=VIDEO_URL',
-        example: '?url=https://youtu.be/sOnqjkJTMaA'
+        error: 'Requiere ?url=VIDEO_URL'
       });
     }
 
     console.log(`📥 ${url}`);
 
-    // ✅ SOLO getInfo() - NADA de pipe/fs/escritura
-    const info = await ytdl.getInfo(url, {
-      // 🔒 MÍNIMO: Sin cache/disco
-      requestOptions: {
-        cache: false,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      },
-      // 🔒 Sin debug
-      verbose: false
-    });
+    // ✅ YT-DLP: Info SIN descargar
+    const info = await ytDlpWrap.execPromise([
+      url,
+      '--dump-json',           // Solo JSON info
+      '--no-download',         // NO descargar
+      '--no-cache-dir',        // Sin cache/disco
+      '--no-playlist',         // Solo video
+      '--flat-playlist'        // Sin listas
+    ]);
 
-    // ✅ Formatos con URL válida
-    const formats = info.formats
-      .filter(f => f.url && f.url.length > 20)
+    const data = JSON.parse(info);
+
+    // ✅ Formatos válidos
+    const formats = data.formats
+      .filter(f => f.url && f.vcodec !== 'none' || f.acodec !== 'none')
       .map(f => ({
-        itag: f.itag,
-        quality: f.qualityLabel || f.quality,
-        hasVideo: !!f.hasVideo,
-        hasAudio: !!f.hasAudio,
-        container: f.container,
-        bitrate: f.bitrate,
+        itag: f.format_id,
+        quality: f.quality || f.height ? `${f.height}p` : 'audio',
+        fps: f.fps,
+        hasVideo: f.vcodec !== 'none',
+        hasAudio: f.acodec !== 'none',
+        container: f.ext,
+        bitrate: f.tbr || f.abr,
         url: f.url
       }));
 
     const response = {
       success: true,
       videoDetails: {
-        title: info.videoDetails.title,
-        author: info.videoDetails.author?.name || 'Desconocido',
-        duration: parseInt(info.videoDetails.lengthSeconds),
-        viewCount: parseInt(info.videoDetails.viewCount),
-        thumbnail: info.videoDetails.thumbnails?.[info.videoDetails.thumbnails.length - 1]?.url,
-        videoId: info.videoDetails.videoId
+        title: data.title,
+        author: data.uploader,
+        duration: data.duration,
+        viewCount: data.view_count,
+        thumbnail: data.thumbnail,
+        uploadDate: data.upload_date
       },
       formats,
-      // 🎯 MEJORES OPCIONES
       bestVideoAudio: formats
         .filter(f => f.hasVideo && f.hasAudio)
         .sort((a, b) => {
-          const qa = parseInt(a.quality?.match(/\d+/)?.[0] || 0);
-          const qb = parseInt(b.quality?.match(/\d+/)?.[0] || 0);
+          const qa = parseInt(a.quality) || 0;
+          const qb = parseInt(b.quality) || 0;
           return qb - qa;
         })[0],
       bestAudio: formats
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
       timestamp: new Date().toISOString()
     };
 
-    console.log(`✅ ${info.videoDetails.title}`);
+    console.log(`✅ ${data.title}`);
     res.status(200).json(response);
 
   } catch (error) {
@@ -83,7 +83,7 @@ export default async function handler(req, res) {
     res.status(500).json({
       success: false,
       error: error.message,
-      url: req.query.url || 'sin url'
+      url: req.query.url
     });
   }
 }
