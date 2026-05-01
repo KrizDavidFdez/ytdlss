@@ -1,4 +1,4 @@
-// api/index.js - Serverless para Vercel
+// api/index.js - FIX para EROFS error
 import ytdl from 'ytdl-core-enhanced';
 
 const cookieData = {
@@ -33,8 +33,36 @@ function cookiesToNetscapeString(cookies) {
 
 const cookieString = cookiesToNetscapeString(cookieData.cookies);
 
+// ✅ FIX: Deshabilitar cache de HTML en Serverless
+const ytdlOptions = {
+  requestOptions: {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Cookie': cookieString,
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    },
+    timeout: 30000,
+    // ✅ FIX: Deshabilitar escritura de archivos temporales
+    cache: false,
+    // ✅ Serverless no puede escribir archivos
+    downloadToFile: false
+  },
+  // ✅ No parsear HTML innecesariamente
+  lang: 'en',
+  // ✅ Evitar debugging que escribe archivos
+  verbose: false
+};
+
 export default async function handler(req, res) {
-  // ✅ CORS para todas las IPs
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -50,35 +78,22 @@ export default async function handler(req, res) {
     if (!url) {
       return res.status(400).json({ 
         error: 'Requiere ?url=VIDEO_URL',
-        example: '/api/youtube?url=https://youtu.be/VIDEO_ID'
+        example: '/api?url=https://youtu.be/VIDEO_ID'
       });
     }
 
-    const options = {
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Cookie': cookieString,
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'none',
-          'Sec-Fetch-User': '?1'
-        },
-        timeout: 60000
-      }
-    };
-
     console.log(`📥 ${url}`);
-    const info = await ytdl.getInfo(url, options);
+    
+    // ✅ Usar getBasicInfo para evitar EROFS
+    const info = await ytdl.getBasicInfo(url, ytdlOptions);
+    
+    // Obtener formatos adicionales si es necesario
+    const formats = await ytdl.getVideoInfo(url, ytdlOptions).then(vid => vid.formats);
 
-    // 🎥 JSON COMPLETO con URLs directas
     const response = {
       success: true,
       videoDetails: info.videoDetails,
-      formats: info.formats.map(f => ({
+      formats: formats.map(f => ({
         itag: f.itag,
         qualityLabel: f.qualityLabel,
         quality: f.quality,
@@ -89,12 +104,12 @@ export default async function handler(req, res) {
         audioCodec: f.audioCodec,
         videoCodec: f.videoCodec,
         bitrate: f.bitrate,
-        url: f.url,  // ✅ URL DIRECTA para <video>/<audio>
+        url: f.url,
         contentLength: f.contentLength
-      })).filter(f => f.url),
-      bestVideoAudio: info.formats.filter(f => f.hasVideo && f.hasAudio)
+      })).filter(f => f.url && f.url.length > 10),
+      bestVideoAudio: formats.filter(f => f.hasVideo && f.hasAudio)
         .sort((a, b) => (parseInt(b.qualityLabel) || 0) - (parseInt(a.qualityLabel) || 0))[0],
-      bestAudio: info.formats.filter(f => f.hasAudio && !f.hasVideo)
+      bestAudio: formats.filter(f => f.hasAudio && !f.hasVideo)
         .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0],
       timestamp: new Date().toISOString()
     };
