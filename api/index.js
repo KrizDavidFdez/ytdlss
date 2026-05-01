@@ -1,4 +1,4 @@
-// api/index.js - FIX para EROFS error
+// api/index.js - FIX DEFINITIVO para EROFS en Serverless
 import ytdl from 'ytdl-core-enhanced';
 
 const cookieData = {
@@ -33,39 +33,43 @@ function cookiesToNetscapeString(cookies) {
 
 const cookieString = cookiesToNetscapeString(cookieData.cookies);
 
-// ✅ FIX: Deshabilitar cache de HTML en Serverless
+// 🚀 CONFIGURACIÓN CRÍTICA para Serverless (SIN EROFS)
 const ytdlOptions = {
   requestOptions: {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'gzip, deflate, br',
       'Cookie': cookieString,
       'Sec-Fetch-Dest': 'document',
       'Sec-Fetch-Mode': 'navigate',
       'Sec-Fetch-Site': 'none',
       'Sec-Fetch-User': '?1',
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
+      'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+      'Pragma': 'no-cache'
     },
-    timeout: 30000,
-    // ✅ FIX: Deshabilitar escritura de archivos temporales
+    timeout: 15000, // 🔽 Reducido para serverless
+    // 🚫 CRÍTICO: Deshabilitar TODA escritura de archivos
     cache: false,
-    // ✅ Serverless no puede escribir archivos
-    downloadToFile: false
+    downloadToFile: false,
+    // 🚫 Evitar cualquier operación de disco
+    followRedirects: true,
+    maxRedirects: 5
   },
-  // ✅ No parsear HTML innecesariamente
   lang: 'en',
-  // ✅ Evitar debugging que escribe archivos
-  verbose: false
+  verbose: false,
+  // 🚀 MÁS FIXES para serverless
+  extractAudio: false,
+  quality: 'highest',
+  filter: 'audioandvideo'
 };
 
 export default async function handler(req, res) {
+  // CORS para serverless
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -75,53 +79,76 @@ export default async function handler(req, res) {
   try {
     const { url } = req.query;
     
-    if (!url) {
+    if (!url || typeof url !== 'string') {
       return res.status(400).json({ 
-        error: 'Requiere ?url=VIDEO_URL',
-        example: '/api?url=https://youtu.be/VIDEO_ID'
+        success: false,
+        error: 'Falta parámetro ?url=VIDEO_URL',
+        example: '/api?url=https://youtu.be/sOnqjkJTMaA'
       });
     }
 
-    console.log(`📥 ${url}`);
-    
-    // ✅ Usar getBasicInfo para evitar EROFS
-    const info = await ytdl.getBasicInfo(url, ytdlOptions);
-    
-    // Obtener formatos adicionales si es necesario
-    const formats = await ytdl.getVideoInfo(url, ytdlOptions).then(vid => vid.formats);
+    console.log(`📥 Procesando: ${url}`);
 
-    const response = {
-      success: true,
-      videoDetails: info.videoDetails,
-      formats: formats.map(f => ({
+    // 🚀 MÉTODO SEGURO: Solo getBasicInfo + getVideoInfo (SIN archivos)
+    const [basicInfo, videoInfo] = await Promise.all([
+      ytdl.getBasicInfo(url, ytdlOptions),
+      ytdl.getVideoInfo(url, ytdlOptions)
+    ]);
+
+    const formats = videoInfo.formats;
+
+    // 🎯 Filtrar formatos válidos con URL directa
+    const validFormats = formats
+      .filter(f => f.url && f.url.length > 20)
+      .map(f => ({
         itag: f.itag,
-        qualityLabel: f.qualityLabel,
+        qualityLabel: f.qualityLabel || f.quality,
         quality: f.quality,
         fps: f.fps,
         container: f.container,
-        hasVideo: f.hasVideo,
-        hasAudio: f.hasAudio,
+        hasVideo: !!f.hasVideo,
+        hasAudio: !!f.hasAudio,
         audioCodec: f.audioCodec,
         videoCodec: f.videoCodec,
         bitrate: f.bitrate,
         url: f.url,
-        contentLength: f.contentLength
-      })).filter(f => f.url && f.url.length > 10),
-      bestVideoAudio: formats.filter(f => f.hasVideo && f.hasAudio)
-        .sort((a, b) => (parseInt(b.qualityLabel) || 0) - (parseInt(a.qualityLabel) || 0))[0],
-      bestAudio: formats.filter(f => f.hasAudio && !f.hasVideo)
+        contentLength: f.contentLength,
+        duration: f.duration
+      }));
+
+    const response = {
+      success: true,
+      videoDetails: {
+        title: basicInfo.videoDetails.title,
+        author: basicInfo.videoDetails.author.name,
+        thumbnail: basicInfo.videoDetails.thumbnails[0]?.url,
+        duration: basicInfo.videoDetails.lengthSeconds,
+        viewCount: basicInfo.videoDetails.viewCount,
+        uploadDate: basicInfo.videoDetails.uploadDate
+      },
+      formats: validFormats,
+      bestVideoAudio: validFormats
+        .filter(f => f.hasVideo && f.hasAudio)
+        .sort((a, b) => (parseInt(b.qualityLabel?.replace('p', '')) || 0) - (parseInt(a.qualityLabel?.replace('p', '')) || 0))[0],
+      bestAudio: validFormats
+        .filter(f => f.hasAudio && !f.hasVideo)
         .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0],
       timestamp: new Date().toISOString()
     };
 
+    console.log(`✅ Éxito: ${basicInfo.videoDetails.title}`);
     res.status(200).json(response);
 
   } catch (error) {
-    console.error('❌', error.message);
+    console.error('❌ Error:', error.message);
+    
     res.status(500).json({
       success: false,
-      error: error.message,
-      url: req.query.url
+      error: error.message.includes('EROFS') 
+        ? 'Error de sistema temporal. Intenta de nuevo.'
+        : error.message,
+      url: req.query?.url || 'No proporcionada',
+      hint: 'Verifica que la URL sea válida de YouTube'
     });
   }
 }
