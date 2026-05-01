@@ -1,0 +1,11 @@
+{
+  "name": "yt-api-vercel",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "ytdl-core-enhanced": "latest"
+  }
+}
