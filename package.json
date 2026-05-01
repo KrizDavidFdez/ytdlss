@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vercel dev"
+    "dev": "vercel dev",
+    "build": "echo 'No build step needed'",
+    "start": "vercel dev"
   },
   "dependencies": {
     "ytdl-core-enhanced": "latest"
+  },
+  "engines": {
+    "node": "18.x"
   }
 }
