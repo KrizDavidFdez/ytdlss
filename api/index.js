@@ -1,7 +1,41 @@
-// api/index.js - ✅ YT-DLP: Serverless perfecto
-import YTDlpWrap from 'yt-dlp-wrap';
-
-const ytDlpWrap = new YTDlpWrap();
+// api/index.js - ✅ Lynote Proxy + User Proxy Headers
+async function getLynoteDownloadUrl(videoUrl, userIp, userAgent) {
+  try {
+    const response = await fetch(
+      `https://lynote.ai/api/youtube-service/youtube/getYoutubeDownloadUrlData?videoUrl=${encodeURIComponent(videoUrl)}`,
+      {
+        headers: {
+          // ✅ PROXY DEL USUARIO (IP/Geo del cliente)
+          'X-Forwarded-For': userIp,
+          'X-Real-IP': userIp,
+          'X-Client-IP': userIp,
+          'CF-Connecting-IP': userIp,  // Cloudflare
+          'True-Client-IP': userIp,    // Akamai
+          
+          // ✅ USER-AGENT del cliente
+          'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          
+          // ✅ Headers originales + user info
+          'Accept': 'application/json',
+          'X-Client-Timezone': 'America/Lima',
+          'X-User-Id': `user_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          'X-Roles': 'role_' + Math.random().toString(36).substr(2, 9),
+          'Accept-Language': 'en-US',
+          'App-Project-Id': 'lynote-web-v1.0',
+          'App-Os-Platform': 'web',
+          'version': 'V-1.0',
+          'Referer': 'https://lynote.ai/es/youtube-downloader'
+        }
+      }
+    );
+    
+    const data = await response.json();
+    return data.data?.formats || [];
+    
+  } catch {
+    return [];
+  }
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -23,67 +57,47 @@ export default async function handler(req, res) {
       });
     }
 
-    console.log(`📥 ${url}`);
+    // ✅ INFO DEL USUARIO que hace la solicitud
+    const userIp = req.headers['x-forwarded-for'] || 
+                   req.headers['x-real-ip'] || 
+                   req.socket.remoteAddress || 
+                   req.connection.remoteAddress;
+    
+    const userAgent = req.headers['user-agent'];
 
-    // ✅ YT-DLP: Info SIN descargar
-    const info = await ytDlpWrap.execPromise([
-      url,
-      '--dump-json',           // Solo JSON info
-      '--no-download',         // NO descargar
-      '--no-cache-dir',        // Sin cache/disco
-      '--no-playlist',         // Solo video
-      '--flat-playlist'        // Sin listas
-    ]);
+    console.log(`🌐 User IP: ${userIp} | UA: ${userAgent?.substring(0, 50)}`);
 
-    const data = JSON.parse(info);
-
-    // ✅ Formatos válidos
-    const formats = data.formats
-      .filter(f => f.url && f.vcodec !== 'none' || f.acodec !== 'none')
-      .map(f => ({
-        itag: f.format_id,
-        quality: f.quality || f.height ? `${f.height}p` : 'audio',
-        fps: f.fps,
-        hasVideo: f.vcodec !== 'none',
-        hasAudio: f.acodec !== 'none',
-        container: f.ext,
-        bitrate: f.tbr || f.abr,
-        url: f.url
-      }));
+    // ✅ Usa IP/UA del usuario real
+    const formats = await getLynoteDownloadUrl(url, userIp, userAgent);
+    
+    if (!formats.length) {
+      return res.status(404).json({
+        success: false,
+        error: 'No se encontraron formatos'
+      });
+    }
 
     const response = {
       success: true,
-      videoDetails: {
-        title: data.title,
-        author: data.uploader,
-        duration: data.duration,
-        viewCount: data.view_count,
-        thumbnail: data.thumbnail,
-        uploadDate: data.upload_date
-      },
-      formats,
-      bestVideoAudio: formats
-        .filter(f => f.hasVideo && f.hasAudio)
-        .sort((a, b) => {
-          const qa = parseInt(a.quality) || 0;
-          const qb = parseInt(b.quality) || 0;
-          return qb - qa;
-        })[0],
-      bestAudio: formats
-        .filter(f => f.hasAudio && !f.hasVideo)
-        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0],
+      userIp: userIp,  // ✅ IP del usuario
+      formats: formats.map(f => ({
+        quality: f.resolution || 'unknown',
+        format_id: f.format_id,
+        container: f.ext,
+        url: f.url
+      })),
+      best: formats[0].url,
       timestamp: new Date().toISOString()
     };
 
-    console.log(`✅ ${data.title}`);
+    console.log(`✅ ${formats.length} formatos para IP: ${userIp}`);
     res.status(200).json(response);
 
   } catch (error) {
     console.error('❌', error.message);
     res.status(500).json({
       success: false,
-      error: error.message,
-      url: req.query.url
+      error: error.message
     });
   }
 }
