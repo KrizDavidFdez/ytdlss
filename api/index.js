@@ -1,40 +1,92 @@
-// api/index.js - ✅ Lynote Proxy + User Proxy Headers
-async function getLynoteDownloadUrl(videoUrl, userIp, userAgent) {
-  try {
-    const response = await fetch(
-      `https://lynote.ai/api/youtube-service/youtube/getYoutubeDownloadUrlData?videoUrl=${encodeURIComponent(videoUrl)}`,
-      {
-        headers: {
-          // ✅ PROXY DEL USUARIO (IP/Geo del cliente)
-          'X-Forwarded-For': userIp,
-          'X-Real-IP': userIp,
-          'X-Client-IP': userIp,
-          'CF-Connecting-IP': userIp,  // Cloudflare
-          'True-Client-IP': userIp,    // Akamai
-          
-          // ✅ USER-AGENT del cliente
-          'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          
-          // ✅ Headers originales + user info
-          'Accept': 'application/json',
-          'X-Client-Timezone': 'America/Lima',
-          'X-User-Id': `user_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-          'X-Roles': 'role_' + Math.random().toString(36).substr(2, 9),
-          'Accept-Language': 'en-US',
-          'App-Project-Id': 'lynote-web-v1.0',
-          'App-Os-Platform': 'web',
-          'version': 'V-1.0',
-          'Referer': 'https://lynote.ai/es/youtube-downloader'
-        }
-      }
-    );
-    
-    const data = await response.json();
-    return data.data?.formats || [];
-    
-  } catch {
-    return [];
+// api/index.js - ✅ Clipto Proxy + User Proxy Headers
+class CliptoScraper {
+  constructor(userIp, userAgent) {
+    this.baseUrl = 'https://www.clipto.com';
+    this.headers = {
+      'Accept': 'application/json, text/plain, */*',
+      'Content-Type': 'application/json',
+      'User-Agent': userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      
+      // ✅ PROXY DEL USUARIO (IP/Geo del cliente)
+      'X-Forwarded-For': userIp,
+      'X-Real-IP': userIp,
+      'X-Client-IP': userIp,
+      'CF-Connecting-IP': userIp,
+      'True-Client-IP': userIp
+    };
   }
+
+  async Mp4(videoUrl) {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/youtube`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify({ url: videoUrl })
+      });
+
+      const data = await response.json();
+      
+      // Busca formatId 18 (360p mp4)
+      const mp4Format = data.medias?.find(m => m.formatId === 18);
+      
+      if (!mp4Format) return null;
+
+      return {
+        quality: '360p',
+        format_id: mp4Format.formatId,
+        container: mp4Format.ext,
+        url: mp4Format.url,
+        title: data.title,
+        thumbnail: data.thumbnail,
+        duration: data.duration
+      };
+
+    } catch {
+      return null;
+    }
+  }
+
+  async _128kbps(videoUrl) {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/youtube`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify({ url: videoUrl })
+      });
+
+      const data = await response.json();
+      
+      // Busca formatId 140 (m4a 131kbps)
+      const audioFormat = data.medias?.find(m => m.formatId === 140);
+      
+      if (!audioFormat) return null;
+
+      return {
+        quality: '128kbps',
+        format_id: audioFormat.formatId,
+        container: audioFormat.ext,
+        url: audioFormat.url,
+        title: data.title,
+        thumbnail: data.thumbnail,
+        duration: data.duration
+      };
+
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function getCliptoDownloadUrl(videoUrl, userIp, userAgent) {
+  const scraper = new CliptoScraper(userIp, userAgent);
+  
+  // Obtiene ambos formatos
+  const [mp4, audio] = await Promise.all([
+    scraper.Mp4(videoUrl),
+    scraper._128kbps(videoUrl)
+  ]);
+
+  return [mp4, audio].filter(Boolean);
 }
 
 export default async function handler(req, res) {
@@ -57,7 +109,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ✅ INFO DEL USUARIO que hace la solicitud
+    // ✅ INFO DEL USUARIO
     const userIp = req.headers['x-forwarded-for'] || 
                    req.headers['x-real-ip'] || 
                    req.socket.remoteAddress || 
@@ -67,8 +119,8 @@ export default async function handler(req, res) {
 
     console.log(`🌐 User IP: ${userIp} | UA: ${userAgent?.substring(0, 50)}`);
 
-    // ✅ Usa IP/UA del usuario real
-    const formats = await getLynoteDownloadUrl(url, userIp, userAgent);
+    // ✅ Usa Clipto con IP/UA del usuario
+    const formats = await getCliptoDownloadUrl(url, userIp, userAgent);
     
     if (!formats.length) {
       return res.status(404).json({
@@ -79,18 +131,19 @@ export default async function handler(req, res) {
 
     const response = {
       success: true,
-      userIp: userIp,  // ✅ IP del usuario
+      userIp: userIp,
       formats: formats.map(f => ({
-        quality: f.resolution || 'unknown',
+        quality: f.quality,
         format_id: f.format_id,
-        container: f.ext,
-        url: f.url
+        container: f.container,
+        url: f.url,
+        title: f.title
       })),
-      best: formats[0].url,
+      best: formats[0].url, // MP4 360p como mejor
       timestamp: new Date().toISOString()
     };
 
-    console.log(`✅ ${formats.length} formatos para IP: ${userIp}`);
+    console.log(`✅ ${formats.length} formatos (Clipto) para IP: ${userIp}`);
     res.status(200).json(response);
 
   } catch (error) {
