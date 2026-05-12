@@ -1,12 +1,11 @@
-// api/index.js
-// ✅ AUDIO + VIDEO
+// api/video.js
+// ✅ VIDEO DIRECTO
 // ✅ ULTRA FAST
-// ✅ DEVUELVE LINKS TEMPORALES
-// ✅ 360P VIDEO
-// ✅ 128KBPS AUDIO
+// ✅ DEVUELVE 360P
 // ✅ USA PROXIES
 // ✅ SIN DESCARGAR
 // ✅ SIN STREAM
+// ✅ URL TEMPORAL
 
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
@@ -113,21 +112,14 @@ export default async function handler(
     const data =
       await response.json()
 
-    // ✅ audio 128kbps
-    const audio =
-      data.medias?.find(
-        v =>
-          v.formatId === 140
-      )
-
-    // ✅ video 360p
+    // ✅ buscar 360p
     let video =
       data.medias?.find(
         v =>
           v.quality === '360p'
       )
 
-    // ✅ fallback mp4
+    // ✅ fallback
     if (!video) {
 
       video =
@@ -137,6 +129,18 @@ export default async function handler(
         )
     }
 
+    if (!video) {
+
+      return res.status(404).json({
+
+        success: false,
+
+        error:
+          'No video'
+      })
+    }
+
+    // ✅ respuesta
     return res.status(200).json({
 
       success: true,
@@ -147,60 +151,27 @@ export default async function handler(
       duration:
         data.duration,
 
-      thumbnail:
-        data.thumbnail,
+      quality:
+        video.quality || '360p',
 
-      audio: audio
-        ? {
+      size:
+        video.size
+          ? `${(
+              video.size /
+              1024 /
+              1024
+            ).toFixed(1)}MB`
+          : 'N/A',
 
-            quality:
-              '128kbps',
+      mime:
+        'video/mp4',
 
-            size:
-              audio.size
-                ? `${(
-                    audio.size /
-                    1024 /
-                    1024
-                  ).toFixed(1)}MB`
-                : 'N/A',
+      filename:
+        `${data.title}.mp4`,
 
-            mime:
-              'audio/mp4',
-
-            filename:
-              `${data.title}.mp3`,
-
-            url:
-              audio.url
-          }
-        : null,
-
-      video: video
-        ? {
-
-            quality:
-              video.quality || '360p',
-
-            size:
-              video.size
-                ? `${(
-                    video.size /
-                    1024 /
-                    1024
-                  ).toFixed(1)}MB`
-                : 'N/A',
-
-            mime:
-              'video/mp4',
-
-            filename:
-              `${data.title}.mp4`,
-
-            url:
-              video.url
-          }
-        : null
+      // ✅ LINK REAL
+      url:
+        video.url
     })
 
   } catch (e) {
