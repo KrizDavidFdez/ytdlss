@@ -13,7 +13,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 // ⚡ proxies rápidas
 const PROXIES = [
 
-  'http://141.95.55.160:3128',
+  'socks5://206.123.156.226:5076',
 
   'socks5://94.131.118.39:1082',
 
