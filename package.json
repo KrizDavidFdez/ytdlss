@@ -8,7 +8,8 @@
     "start": "vercel dev"
   },
   "dependencies": {
-    "axios": "latest"
+    "axios": "latest",
+    "socks-proxy-agent": "*"
   },
   "engines": {
     "node": "24.x"
