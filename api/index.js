@@ -1,48 +1,32 @@
 // api/index.js
-// ✅ DEVUELVE AUDIO EN BASE64
-// ✅ JSON + BUFFER
-// ✅ USA PROXIES
-// ✅ SIN ARCHIVOS
 
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
+import crypto from 'crypto'
 
-// ✅ proxies rápidas
+// ✅ memoria temporal
+const audioMap = new Map()
+
+// ✅ proxies
 const PROXIES = [
-
   {
-    url: 'http://141.95.55.160:3128',
-    type: 'http'
+    url: 'socks4://130.61.119.46:3128',
+    type: 'socks'
   },
-
-  {
-    url: 'http://209.250.253.81:443',
-    type: 'http'
-  },
-
   {
     url: 'socks5://94.131.118.39:1082',
     type: 'socks'
   },
-
   {
-    url: 'socks4://164.132.168.87:50161',
-    type: 'socks'
-  },
-
-  {
-    url: 'socks4://130.61.119.46:3128',
-    type: 'socks'
+    url: 'http://141.95.55.160:3128',
+    type: 'http'
   }
 ]
 
-// ✅ proxy random
 function getRandomProxy() {
 
   const proxy =
     PROXIES[Math.floor(Math.random() * PROXIES.length)]
-
-  console.log('⚡', proxy.url)
 
   if (proxy.type === 'socks') {
     return new SocksProxyAgent(proxy.url)
@@ -51,86 +35,68 @@ function getRandomProxy() {
   return new HttpsProxyAgent(proxy.url)
 }
 
-class CliptoProxy {
+async function proxyFetch(url, options = {}) {
 
-  constructor(userIp, userAgent) {
+  for (let i = 0; i < 10; i++) {
 
-    this.userIp = userIp
-    this.userAgent = userAgent
-  }
+    try {
 
-  // ✅ fetch con retries
-  async proxyFetch(
-    url,
-    options = {},
-    retries = 10
-  ) {
+      const res = await fetch(url, {
+        ...options,
+        agent: getRandomProxy(),
+        redirect: 'follow'
+      })
 
-    for (let i = 0; i < retries; i++) {
-
-      const agent =
-        getRandomProxy()
-
-      try {
-
-        const response =
-          await fetch(url, {
-            ...options,
-            agent,
-            redirect: 'follow'
-          })
-
-        if (response.ok) {
-          return response
-        }
-
-      } catch (e) {
-
-        console.log(
-          '❌',
-          e.message
-        )
+      if (res.ok) {
+        return res
       }
-    }
 
-    throw new Error(
-      'All proxies failed'
-    )
+    } catch {}
   }
 
-  // ✅ metadata
-  async getMetadata(videoUrl) {
+  throw new Error('all proxies failed')
+}
 
-    const headers = {
+// ✅ principal
+export default async function handler(req, res) {
 
-      'Content-Type':
-        'application/json',
+  try {
 
-      'User-Agent':
-        this.userAgent
-        || 'Mozilla/5.0',
+    const video =
+      decodeURIComponent(req.query.url || '')
 
-      'X-Forwarded-For':
-        this.userIp,
+    if (!video) {
 
-      'Referer':
-        'https://www.clipto.com/'
+      return res.status(400).json({
+        success: false
+      })
     }
 
-    const res =
-      await this.proxyFetch(
+    const response =
+      await proxyFetch(
         'https://www.clipto.com/api/youtube',
         {
           method: 'POST',
-          headers,
+
+          headers: {
+            'Content-Type':
+              'application/json',
+
+            'User-Agent':
+              'Mozilla/5.0',
+
+            'Referer':
+              'https://www.clipto.com/'
+          },
+
           body: JSON.stringify({
-            url: videoUrl
+            url: video
           })
         }
       )
 
     const data =
-      await res.json()
+      await response.json()
 
     const audio =
       data.medias?.find(
@@ -139,12 +105,30 @@ class CliptoProxy {
 
     if (!audio) {
 
-      throw new Error(
-        'No audio'
-      )
+      return res.status(404).json({
+        success: false
+      })
     }
 
-    return {
+    // ✅ id temporal
+    const id =
+      crypto.randomBytes(8)
+      .toString('hex')
+
+    // ✅ guardar URL real
+    audioMap.set(id, {
+      url: audio.url,
+      created: Date.now()
+    })
+
+    // ✅ borrar después de 30 min
+    setTimeout(() => {
+      audioMap.delete(id)
+    }, 1000 * 60 * 30)
+
+    return res.json({
+
+      success: true,
 
       title:
         data.title,
@@ -152,142 +136,74 @@ class CliptoProxy {
       duration:
         data.duration,
 
-      size:
-        audio.size,
+      quality:
+        '128kbps',
 
-      audioUrl:
-        audio.url
-    }
-  }
-
-  // ✅ descargar audio como buffer
-  async downloadBuffer(audioUrl) {
-
-    const response =
-      await this.proxyFetch(
-        audioUrl,
-        {
-          headers: {
-
-            'User-Agent':
-              'Mozilla/5.0',
-
-            'Referer':
-              'https://www.clipto.com/'
-          }
-        }
-      )
-
-    // ✅ buffer
-    const arrayBuffer =
-      await response.arrayBuffer()
-
-    return Buffer.from(
-      arrayBuffer
-    )
-  }
-}
-
-// ✅ endpoint
-export default async function handler(
-  req,
-  res
-) {
-
-  res.setHeader(
-    'Access-Control-Allow-Origin',
-    '*'
-  )
-
-  try {
-
-    const {
-      url
-    } = req.query
-
-    if (!url) {
-
-      return res.status(400).json({
-
-        success: false,
-
-        error:
-          'usa ?url=YOUTUBE_URL'
-      })
-    }
-
-    const userIp =
-      req.headers[
-        'x-forwarded-for'
-      ]?.split(',')[0]
-      || '127.0.0.1'
-
-    const userAgent =
-      req.headers[
-        'user-agent'
-      ]
-
-    const proxy =
-      new CliptoProxy(
-        userIp,
-        userAgent
-      )
-
-    // ✅ metadata
-    const info =
-      await proxy.getMetadata(
-        decodeURIComponent(url)
-      )
-
-    // ✅ buffer
-    const audioBuffer =
-      await proxy.downloadBuffer(
-        info.audioUrl
-      )
-
-    // ✅ base64
-    const base64 =
-      audioBuffer.toString(
-        'base64'
-      )
-
-    return res.status(200).json({
-
-      success: true,
-
-      title:
-        info.title,
-
-      duration:
-        info.duration,
-
-      size:
-        info.size
-          ? `${(
-              info.size /
-              1024 /
-              1024
-            ).toFixed(1)}MB`
-          : 'N/A',
-
-      mime:
-        'audio/mpeg',
-
-      // ✅ AUDIO BUFFER
-      buffer:
-        base64
+      audio:
+        `${req.headers.origin || ''}/api/audio?id=${id}`
     })
 
   } catch (e) {
-
-    console.log(e)
 
     return res.status(500).json({
 
       success: false,
 
       error:
-        'No disponible'
+        e.message
     })
   }
+}
+
+// ✅ endpoint del audio
+export async function audioHandler(req, res) {
+
+  try {
+
+    const id =
+      req.query.id
+
+    const saved =
+      audioMap.get(id)
+
+    if (!saved) {
+
+      return res.status(404).send(
+        'expired'
+      )
+    }
+
+    const stream =
+      await proxyFetch(
+        saved.url,
+        {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0'
+          }
+        }
+      )
+
+    res.setHeader(
+      'Content-Type',
+      'audio/mpeg'
+    )
+
+    res.setHeader(
+      'Access-Control-Allow-Origin',
+      '*'
+    )
+
+    stream.body.pipe(res)
+
+  } catch {
+
+    res.status(500).send(
+      'failed'
+    )
+  }
+}
+
+export {
+  audioHandler
 }
