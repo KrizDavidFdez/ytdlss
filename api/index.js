@@ -1,45 +1,28 @@
 // api/index.js
-// ✅ RESPUESTA ULTRA RÁPIDA
-// ✅ DEVUELVE BUFFER BASE64
-// ✅ SIN ARCHIVOS
+// ✅ ULTRA FAST
+// ✅ SIN DESCARGAR EN EL SERVIDOR
+// ✅ SIN BASE64 GIGANTE
 // ✅ SIN STREAM
-// ✅ JSON COMPLETO
-// ✅ PROXIES ROTATIVAS
+// ✅ SOLO DEVUELVE LINK TEMPORAL DIRECTO
+// ✅ MÁS RÁPIDO POSIBLE
 
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 
-// ✅ proxies rápidas
+// ⚡ proxies rápidas
 const PROXIES = [
 
-  {
-    url: 'http://141.95.55.160:3128',
-    type: 'http'
-  },
+  'http://141.95.55.160:3128',
 
-  {
-    url: 'http://209.250.253.81:443',
-    type: 'http'
-  },
+  'socks5://94.131.118.39:1082',
 
-  {
-    url: 'socks5://94.131.118.39:1082',
-    type: 'socks'
-  },
+  'socks4://164.132.168.87:50161',
 
-  {
-    url: 'socks4://164.132.168.87:50161',
-    type: 'socks'
-  },
-
-  {
-    url: 'socks4://130.61.119.46:3128',
-    type: 'socks'
-  }
+  'socks4://130.61.119.46:3128'
 ]
 
 // ✅ proxy random
-function getRandomProxy() {
+function getAgent() {
 
   const proxy =
     PROXIES[
@@ -49,187 +32,22 @@ function getRandomProxy() {
       )
     ]
 
-  console.log(
-    '⚡',
-    proxy.url
-  )
+  if (
+    proxy.startsWith(
+      'socks'
+    )
+  ) {
 
-  if (proxy.type === 'socks') {
     return new SocksProxyAgent(
-      proxy.url
+      proxy
     )
   }
 
   return new HttpsProxyAgent(
-    proxy.url
+    proxy
   )
 }
 
-class CliptoProxy {
-
-  constructor(
-    userIp,
-    userAgent
-  ) {
-
-    this.userIp =
-      userIp
-
-    this.userAgent =
-      userAgent
-  }
-
-  // ✅ fetch con retries
-  async proxyFetch(
-    url,
-    options = {},
-    retries = 10
-  ) {
-
-    for (
-      let i = 0;
-      i < retries;
-      i++
-    ) {
-
-      const agent =
-        getRandomProxy()
-
-      try {
-
-        const response =
-          await fetch(url, {
-
-            ...options,
-
-            agent,
-
-            redirect:
-              'follow'
-          })
-
-        if (response.ok) {
-          return response
-        }
-
-      } catch (e) {
-
-        console.log(
-          '❌',
-          e.message
-        )
-      }
-    }
-
-    throw new Error(
-      'All proxies failed'
-    )
-  }
-
-  // ✅ metadata
-  async getMetadata(
-    videoUrl
-  ) {
-
-    const headers = {
-
-      'Content-Type':
-        'application/json',
-
-      'User-Agent':
-        this.userAgent
-        || 'Mozilla/5.0',
-
-      'X-Forwarded-For':
-        this.userIp,
-
-      'Referer':
-        'https://www.clipto.com/'
-    }
-
-    const res =
-      await this.proxyFetch(
-        'https://www.clipto.com/api/youtube',
-        {
-          method:
-            'POST',
-
-          headers,
-
-          body:
-            JSON.stringify({
-              url:
-                videoUrl
-            })
-        }
-      )
-
-    const data =
-      await res.json()
-
-    const audio =
-      data.medias?.find(
-        m =>
-          m.formatId === 140
-      )
-
-    if (!audio) {
-
-      throw new Error(
-        'No audio'
-      )
-    }
-
-    return {
-
-      title:
-        data.title,
-
-      duration:
-        data.duration,
-
-      size:
-        audio.size,
-
-      audioUrl:
-        audio.url
-    }
-  }
-
-  // ✅ descargar buffer
-  async getBuffer(
-    audioUrl
-  ) {
-
-    const response =
-      await this.proxyFetch(
-        audioUrl,
-        {
-          headers: {
-
-            'User-Agent':
-              'Mozilla/5.0',
-
-            'Accept':
-              '*/*',
-
-            'Referer':
-              'https://www.clipto.com/'
-          }
-        }
-      )
-
-    // ✅ buffer rápido
-    const arrayBuffer =
-      await response.arrayBuffer()
-
-    return Buffer.from(
-      arrayBuffer
-    )
-  }
-}
-
-// ✅ endpoint
 export default async function handler(
   req,
   res
@@ -250,67 +68,82 @@ export default async function handler(
 
       return res.status(400).json({
 
-        success:
-          false,
+        success: false,
 
         error:
           'usa ?url=YOUTUBE_URL'
       })
     }
 
-    const userIp =
-      req.headers[
-        'x-forwarded-for'
-      ]?.split(',')[0]
-      || '127.0.0.1'
+    // ✅ petición ultra rápida
+    const response =
+      await fetch(
+        'https://www.clipto.com/api/youtube',
+        {
 
-    const userAgent =
-      req.headers[
-        'user-agent'
-      ]
+          method: 'POST',
 
-    const proxy =
-      new CliptoProxy(
-        userIp,
-        userAgent
+          agent:
+            getAgent(),
+
+          headers: {
+
+            'Content-Type':
+              'application/json',
+
+            'User-Agent':
+              'Mozilla/5.0',
+
+            'Referer':
+              'https://www.clipto.com/'
+          },
+
+          body:
+            JSON.stringify({
+              url:
+                decodeURIComponent(
+                  url
+                )
+            })
+        }
       )
 
-    // ✅ metadata
-    const info =
-      await proxy.getMetadata(
-        decodeURIComponent(
-          url
-        )
+    const data =
+      await response.json()
+
+    // ✅ audio 128kbps
+    const audio =
+      data.medias?.find(
+        v =>
+          v.formatId === 140
       )
 
-    // ✅ descargar buffer
-    const buffer =
-      await proxy.getBuffer(
-        info.audioUrl
-      )
+    if (!audio) {
 
-    // ✅ base64
-    const base64 =
-      buffer.toString(
-        'base64'
-      )
+      return res.status(404).json({
 
-    // ✅ respuesta JSON
+        success: false,
+
+        error:
+          'No audio'
+      })
+    }
+
+    // ✅ RESPUESTA RÁPIDA
     return res.status(200).json({
 
-      success:
-        true,
+      success: true,
 
       title:
-        info.title,
+        data.title,
 
       duration:
-        info.duration,
+        data.duration,
 
       size:
-        info.size
+        audio.size
           ? `${(
-              info.size /
+              audio.size /
               1024 /
               1024
             ).toFixed(1)}MB`
@@ -320,11 +153,11 @@ export default async function handler(
         'audio/mp4',
 
       filename:
-        `${info.title}.mp3`,
+        `${data.title}.mp3`,
 
-      // ✅ BUFFER
-      buffer:
-        base64
+      // ✅ URL REAL
+      url:
+        audio.url
     })
 
   } catch (e) {
@@ -333,11 +166,10 @@ export default async function handler(
 
     return res.status(500).json({
 
-      success:
-        false,
+      success: false,
 
       error:
-        'No disponible'
+        'Failed'
     })
   }
 }
