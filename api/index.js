@@ -1,10 +1,11 @@
-// api/index.js
+// api/video.js
+// ✅ VIDEO DIRECTO
 // ✅ ULTRA FAST
-// ✅ SIN DESCARGAR EN EL SERVIDOR
-// ✅ SIN BASE64 GIGANTE
+// ✅ DEVUELVE 360P
+// ✅ USA PROXIES
+// ✅ SIN DESCARGAR
 // ✅ SIN STREAM
-// ✅ SOLO DEVUELVE LINK TEMPORAL DIRECTO
-// ✅ MÁS RÁPIDO POSIBLE
+// ✅ URL TEMPORAL
 
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
@@ -75,7 +76,7 @@ export default async function handler(
       })
     }
 
-    // ✅ petición ultra rápida
+    // ✅ request rápida
     const response =
       await fetch(
         'https://www.clipto.com/api/youtube',
@@ -111,25 +112,35 @@ export default async function handler(
     const data =
       await response.json()
 
-    // ✅ audio 128kbps
-    const audio =
+    // ✅ buscar 360p
+    let video =
       data.medias?.find(
         v =>
-          v.formatId === 140
+          v.quality === '360p'
       )
 
-    if (!audio) {
+    // ✅ fallback
+    if (!video) {
+
+      video =
+        data.medias?.find(
+          v =>
+            v.extension === 'mp4'
+        )
+    }
+
+    if (!video) {
 
       return res.status(404).json({
 
         success: false,
 
         error:
-          'No audio'
+          'No video'
       })
     }
 
-    // ✅ RESPUESTA RÁPIDA
+    // ✅ respuesta
     return res.status(200).json({
 
       success: true,
@@ -140,24 +151,27 @@ export default async function handler(
       duration:
         data.duration,
 
+      quality:
+        video.quality || '360p',
+
       size:
-        audio.size
+        video.size
           ? `${(
-              audio.size /
+              video.size /
               1024 /
               1024
             ).toFixed(1)}MB`
           : 'N/A',
 
       mime:
-        'audio/mp4',
+        'video/mp4',
 
       filename:
-        `${data.title}.mp3`,
+        `${data.title}.mp4`,
 
-      // ✅ URL REAL
+      // ✅ LINK REAL
       url:
-        audio.url
+        video.url
     })
 
   } catch (e) {
