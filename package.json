@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "axios": "latest",
+    "https-proxy-agent": "*",
     "socks-proxy-agent": "*"
   },
   "engines": {
