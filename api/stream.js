@@ -1,17 +1,16 @@
-// api/stream.js
+// api/stream.js (actualizado con mejor manejo)
 import { createReadStream } from "fs";
 import { stat } from "fs/promises";
-import { join } from "path";
-import { tmpdir } from "os";
+import { rmSync } from "fs";
 
-// Mismo store que en download.js (en producción usa Redis)
+// Mismo store que en download.js
 const fileStore = new Map();
 
 export default async function handler(req, res) {
   // Configurar CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -33,8 +32,7 @@ export default async function handler(req, res) {
   if (fileInfo.expires < Date.now()) {
     fileStore.delete(id);
     try {
-      const fs = await import('fs');
-      fs.unlinkSync(fileInfo.path);
+      rmSync(fileInfo.path, { force: true });
     } catch (e) {}
     return res.status(404).json({ error: "Archivo expirado" });
   }
@@ -64,7 +62,6 @@ export default async function handler(req, res) {
       const stream = createReadStream(fileInfo.path, { start, end });
       stream.pipe(res);
       
-      // Manejar errores del stream
       stream.on('error', (error) => {
         console.error('Stream error:', error);
         if (!res.headersSent) {
