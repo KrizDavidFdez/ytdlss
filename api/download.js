@@ -1,6 +1,6 @@
 // api/download.js
 import axios from "axios";
-import { createWriteStream, mkdirSync, rmSync, createReadStream } from "fs";
+import { createWriteStream, mkdirSync, rmSync, createReadStream, promises as fs } from "fs";
 import { pipeline } from "stream/promises";
 import { finished } from "stream/promises";
 import { join } from "path";
@@ -15,18 +15,15 @@ class UltraFastDownloader {
 
   async downloadAudio(url, options = {}) {
     const {
-      maxRetries = 3,
-      chunkSize = 1024 * 1024 * 2, // 2MB chunks
+      chunkSize = 1024 * 1024 * 2,
       showProgress = false
     } = options;
 
     try {
       console.log("🚀 Iniciando descarga ultra rápida...");
 
-      // 1️⃣ Obtener metadata
       const metadata = await this._fetchMetadata(url);
       
-      // 2️⃣ Descarga paralela por chunks
       const result = await this._parallelDownload(
         metadata.audioUrl,
         metadata.filename,
@@ -39,7 +36,7 @@ class UltraFastDownloader {
       
       return {
         ...metadata,
-        path: `./temp_${Date.now()}_${metadata.filename}`,
+        path: result.outputPath,
         speed: result.speed,
         downloadTime: result.duration
       };
@@ -60,11 +57,16 @@ class UltraFastDownloader {
       throw new Error("No se encontró audio");
     }
 
-    const headRes = await axios.head(data.audio.url, {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
-    
-    const size = Number(headRes.headers["content-length"] || 0);
+    try {
+      const headRes = await axios.head(data.audio.url, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 10000
+      });
+      var size = Number(headRes.headers["content-length"] || 0);
+    } catch (error) {
+      console.log("No se pudo obtener tamaño, continuando...");
+      var size = 0;
+    }
 
     return {
       audioUrl: data.audio.url,
@@ -77,11 +79,12 @@ class UltraFastDownloader {
 
   async _parallelDownload(url, filename, totalSize, chunkSize, showProgress) {
     const startTime = Date.now();
+    // Usar /tmp en Vercel
     const tempDir = join(tmpdir(), `ytdl_${Date.now()}_${randomBytes(4).toString("hex")}`);
     mkdirSync(tempDir, { recursive: true });
 
     try {
-      if (totalSize === 0) {
+      if (totalSize === 0 || totalSize < chunkSize) {
         return await this._streamDownload(url, filename, showProgress);
       }
 
@@ -98,7 +101,7 @@ class UltraFastDownloader {
       for (let i = 0; i < chunks.length; i += this.concurrentChunks) {
         const batch = chunks.slice(i, i + this.concurrentChunks);
         const batchPromises = batch.map(chunk => 
-          this._downloadChunk(url, tempDir, chunk, totalSize)
+          this._downloadChunk(url, tempDir, chunk)
             .then(result => {
               downloadedBytes += chunk.end - chunk.start + 1;
               return result;
@@ -108,8 +111,8 @@ class UltraFastDownloader {
       }
 
       console.log("🔧 Combinando chunks...");
-      const outputPath = join(process.cwd(), "tmp", filename);
-      mkdirSync(join(process.cwd(), "tmp"), { recursive: true });
+      // Guardar en /tmp
+      const outputPath = join(tmpdir(), filename);
       await this._mergeChunks(tempDir, outputPath, chunks.length);
 
       const endTime = Date.now();
@@ -119,11 +122,14 @@ class UltraFastDownloader {
       return { duration, speed: `${speed} MB/s`, outputPath };
 
     } finally {
-      rmSync(tempDir, { recursive: true, force: true });
+      // Limpiar archivos temporales
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch (e) {}
     }
   }
 
-  async _downloadChunk(url, tempDir, chunk, totalSize) {
+  async _downloadChunk(url, tempDir, chunk) {
     const { start, end, index } = chunk;
     
     try {
@@ -167,28 +173,42 @@ class UltraFastDownloader {
 
   async _streamDownload(url, filename, showProgress) {
     const startTime = Date.now();
-    const outputPath = join(process.cwd(), "tmp", filename);
-    mkdirSync(join(process.cwd(), "tmp"), { recursive: true });
+    const outputPath = join(tmpdir(), filename);
     
     const response = await axios({
       url,
       method: "GET",
       responseType: "stream",
-      headers: { "User-Agent": "Mozilla/5.0" }
+      headers: { "User-Agent": "Mozilla/5.0" },
+      timeout: 60000
     });
 
     await pipeline(response.data, createWriteStream(outputPath));
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    const stats = await fs.promises.stat(outputPath);
+    const stats = await fs.stat(outputPath);
     const speed = (stats.size / ((Date.now() - startTime) / 1000) / 1024 / 1024).toFixed(2);
 
     return { duration, speed: `${speed} MB/s`, outputPath };
   }
 }
 
-// Almacenamiento temporal de archivos (en producción usa Redis o similar)
+// Almacenamiento temporal de archivos
 const fileStore = new Map();
+
+// Limpiar archivos viejos cada 30 minutos
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, data] of fileStore.entries()) {
+    if (data.expires < now) {
+      try {
+        rmSync(data.path, { force: true });
+        fileStore.delete(id);
+        console.log(`🗑️ Limpiado archivo expirado: ${id}`);
+      } catch (e) {}
+    }
+  }
+}, 30 * 60 * 1000);
 
 export default async function handler(req, res) {
   // Configurar CORS
@@ -212,14 +232,14 @@ export default async function handler(req, res) {
     const downloader = new UltraFastDownloader(parseInt(chunks));
     
     const result = await downloader.downloadAudio(url, {
-      concurrentChunks: parseInt(chunks),
+      concurrentChunks: Math.min(parseInt(chunks), 10), // Máximo 10 chunks
       chunkSize: 1024 * 1024 * 2,
       showProgress: false
     });
 
     // Generar ID único para el archivo
     const fileId = randomBytes(16).toString("hex");
-    const filePath = result.path || result.outputPath;
+    const filePath = result.path;
     
     // Guardar metadata
     fileStore.set(fileId, {
@@ -230,22 +250,10 @@ export default async function handler(req, res) {
       expires: Date.now() + 3600000 // Expira en 1 hora
     });
 
-    // Limpiar archivos viejos cada hora
-    setTimeout(() => {
-      fileStore.forEach((value, key) => {
-        if (value.expires < Date.now()) {
-          try {
-            rmSync(value.path, { force: true });
-            fileStore.delete(key);
-          } catch (e) {}
-        }
-      });
-    }, 3600000);
-
-    // Devolver la URL para streaming
+    // Obtener la URL base
     const baseUrl = process.env.VERCEL_URL 
       ? `https://${process.env.VERCEL_URL}`
-      : `http://localhost:3000`;
+      : process.env.URL || `http://localhost:3000`;
 
     return res.status(200).json({
       success: true,
@@ -262,10 +270,11 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Error detallado:", error);
     return res.status(500).json({ 
       success: false, 
-      error: error.message 
+      error: error.message,
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined
     });
   }
 }
