@@ -6,10 +6,122 @@ import { finished } from "stream/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomBytes } from "crypto";
+import { SocksProxyAgent } from "socks-proxy-agent";
+import { HttpsProxyAgent } from "https-proxy-agent";
+
+// ⚡ Proxies rápidas
+const PROXIES = [
+  'http://141.95.55.160:3128',
+  'socks5://94.131.118.39:1082',
+  'socks4://164.132.168.87:50161',
+  'socks4://130.61.119.46:3128'
+];
+
+// ✅ Función para obtener proxy aleatorio
+function getProxyAgent() {
+  const proxy = PROXIES[Math.floor(Math.random() * PROXIES.length)];
+  
+  if (proxy.startsWith('socks')) {
+    return new SocksProxyAgent(proxy);
+  }
+  
+  return new HttpsProxyAgent(proxy);
+}
+
+// Función para obtener metadatos con Clipto API (usa proxies)
+async function fetchMetadataWithClipto(url) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const agent = getProxyAgent();
+      
+      const response = await fetch('https://www.clipto.com/api/youtube', {
+        method: 'POST',
+        agent: agent,
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://www.clipto.com/',
+          'Origin': 'https://www.clipto.com'
+        },
+        body: JSON.stringify({
+          url: decodeURIComponent(url)
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      // Buscar audio en 128kbps (formatId 140)
+      const audio = data.medias?.find(v => v.formatId === 140);
+      
+      // Buscar video en 360p como fallback
+      let video = data.medias?.find(v => v.quality === '360p');
+      if (!video) {
+        video = data.medias?.find(v => v.extension === 'mp4');
+      }
+
+      if (!audio || !audio.url) {
+        throw new Error("No se encontró audio disponible");
+      }
+
+      return {
+        audioUrl: audio.url,
+        title: data.title || "audio",
+        filename: `${data.title.replace(/[\\/:*?"<>|]/g, "_")}.mp3`,
+        size: audio.size || 0,
+        duration: data.duration || 0,
+        thumbnail: data.thumbnail,
+        audioInfo: {
+          quality: '128kbps',
+          mime: 'audio/mp4'
+        }
+      };
+      
+    } catch (error) {
+      console.error(`Intento ${attempt + 1} falló:`, error.message);
+      if (attempt === 2) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+}
+
+// Función de respaldo con la API anterior
+async function fetchMetadataBackup(url) {
+  const { data } = await axios.get(
+    `https://ytdlss-7l8w.vercel.app/api/index?url=${encodeURIComponent(url)}`,
+    { timeout: 15000 }
+  );
+
+  if (!data?.success || !data?.audio?.url) {
+    throw new Error("No se encontró audio");
+  }
+
+  try {
+    const headRes = await axios.head(data.audio.url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      timeout: 10000
+    });
+    var size = Number(headRes.headers["content-length"] || 0);
+  } catch (error) {
+    var size = 0;
+  }
+
+  return {
+    audioUrl: data.audio.url,
+    title: data.title || "audio",
+    filename: data.audio.filename || `${data.title.replace(/[\\/:*?"<>|]/g, "_")}.mp3`,
+    size,
+    duration: data.duration || 0
+  };
+}
 
 class UltraFastDownloader {
-  constructor(concurrentChunks = 5) {
+  constructor(concurrentChunks = 5, useProxies = true) {
     this.concurrentChunks = concurrentChunks;
+    this.useProxies = useProxies;
     this.activeDownloads = new Map();
   }
 
@@ -21,8 +133,20 @@ class UltraFastDownloader {
 
     try {
       console.log("🚀 Iniciando descarga ultra rápida...");
-
-      const metadata = await this._fetchMetadata(url);
+      
+      // Intentar con Clipto API primero (usa proxies)
+      let metadata;
+      try {
+        if (this.useProxies) {
+          console.log("📡 Usando Clipto API con proxies...");
+          metadata = await fetchMetadataWithClipto(url);
+        } else {
+          throw new Error("Proxies deshabilitados");
+        }
+      } catch (cliptoError) {
+        console.log("⚠️ Clipto API falló, usando backup:", cliptoError.message);
+        metadata = await fetchMetadataBackup(url);
+      }
       
       const result = await this._parallelDownload(
         metadata.audioUrl,
@@ -47,39 +171,8 @@ class UltraFastDownloader {
     }
   }
 
-  async _fetchMetadata(url) {
-    const { data } = await axios.get(
-      `https://ytdlss-7l8w.vercel.app/api/index?url=${encodeURIComponent(url)}`,
-      { timeout: 15000 }
-    );
-
-    if (!data?.success || !data?.audio?.url) {
-      throw new Error("No se encontró audio");
-    }
-
-    try {
-      const headRes = await axios.head(data.audio.url, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        timeout: 10000
-      });
-      var size = Number(headRes.headers["content-length"] || 0);
-    } catch (error) {
-      console.log("No se pudo obtener tamaño, continuando...");
-      var size = 0;
-    }
-
-    return {
-      audioUrl: data.audio.url,
-      title: data.title || "audio",
-      filename: data.audio.filename || `${data.title.replace(/[\\/:*?"<>|]/g, "_")}.mp3`,
-      size,
-      duration: data.duration || 0
-    };
-  }
-
   async _parallelDownload(url, filename, totalSize, chunkSize, showProgress) {
     const startTime = Date.now();
-    // Usar /tmp en Vercel
     const tempDir = join(tmpdir(), `ytdl_${Date.now()}_${randomBytes(4).toString("hex")}`);
     mkdirSync(tempDir, { recursive: true });
 
@@ -96,22 +189,15 @@ class UltraFastDownloader {
 
       console.log(`📦 Descargando en ${chunks.length} chunks paralelos...`);
 
-      let downloadedBytes = 0;
-      
       for (let i = 0; i < chunks.length; i += this.concurrentChunks) {
         const batch = chunks.slice(i, i + this.concurrentChunks);
         const batchPromises = batch.map(chunk => 
           this._downloadChunk(url, tempDir, chunk)
-            .then(result => {
-              downloadedBytes += chunk.end - chunk.start + 1;
-              return result;
-            })
         );
         await Promise.all(batchPromises);
       }
 
       console.log("🔧 Combinando chunks...");
-      // Guardar en /tmp
       const outputPath = join(tmpdir(), filename);
       await this._mergeChunks(tempDir, outputPath, chunks.length);
 
@@ -122,7 +208,6 @@ class UltraFastDownloader {
       return { duration, speed: `${speed} MB/s`, outputPath };
 
     } finally {
-      // Limpiar archivos temporales
       try {
         rmSync(tempDir, { recursive: true, force: true });
       } catch (e) {}
@@ -132,29 +217,34 @@ class UltraFastDownloader {
   async _downloadChunk(url, tempDir, chunk) {
     const { start, end, index } = chunk;
     
-    try {
-      const response = await axios({
-        url,
-        method: "GET",
-        responseType: "stream",
-        headers: {
-          "User-Agent": "Mozilla/5.0",
-          "Range": `bytes=${start}-${end}`
-        },
-        timeout: 30000
-      });
+    const config = {
+      url,
+      method: "GET",
+      responseType: "stream",
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Range": `bytes=${start}-${end}`
+      },
+      timeout: 30000
+    };
 
-      const chunkFile = join(tempDir, `chunk_${index}`);
-      const writer = createWriteStream(chunkFile);
-      
-      response.data.pipe(writer);
-      await finished(writer);
-
-      return { index, file: chunkFile };
-    } catch (error) {
-      console.error(`Error en chunk ${index}:`, error.message);
-      throw error;
+    // Usar proxy si está habilitado
+    if (this.useProxies) {
+      try {
+        config.httpsAgent = getProxyAgent();
+      } catch (e) {
+        console.log("Proxy no disponible para chunk");
+      }
     }
+    
+    const response = await axios(config);
+    const chunkFile = join(tempDir, `chunk_${index}`);
+    const writer = createWriteStream(chunkFile);
+    
+    response.data.pipe(writer);
+    await finished(writer);
+
+    return { index, file: chunkFile };
   }
 
   async _mergeChunks(tempDir, outputFile, totalChunks) {
@@ -175,14 +265,21 @@ class UltraFastDownloader {
     const startTime = Date.now();
     const outputPath = join(tmpdir(), filename);
     
-    const response = await axios({
+    const config = {
       url,
       method: "GET",
       responseType: "stream",
       headers: { "User-Agent": "Mozilla/5.0" },
       timeout: 60000
-    });
+    };
 
+    if (this.useProxies) {
+      try {
+        config.httpsAgent = getProxyAgent();
+      } catch (e) {}
+    }
+    
+    const response = await axios(config);
     await pipeline(response.data, createWriteStream(outputPath));
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -193,7 +290,7 @@ class UltraFastDownloader {
   }
 }
 
-// Almacenamiento temporal de archivos
+// Almacenamiento temporal
 const fileStore = new Map();
 
 // Limpiar archivos viejos cada 30 minutos
@@ -220,7 +317,7 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const { url, chunks = "5" } = req.query;
+  const { url, chunks = "5", useProxies = "true" } = req.query;
 
   if (!url) {
     return res.status(400).json({ 
@@ -229,10 +326,14 @@ export default async function handler(req, res) {
   }
 
   try {
-    const downloader = new UltraFastDownloader(parseInt(chunks));
+    const useProxyFlag = useProxies === "true";
+    const downloader = new UltraFastDownloader(
+      Math.min(parseInt(chunks), 10),
+      useProxyFlag
+    );
     
     const result = await downloader.downloadAudio(url, {
-      concurrentChunks: Math.min(parseInt(chunks), 10), // Máximo 10 chunks
+      concurrentChunks: Math.min(parseInt(chunks), 10),
       chunkSize: 1024 * 1024 * 2,
       showProgress: false
     });
@@ -264,9 +365,11 @@ export default async function handler(req, res) {
         size: result.size,
         duration: result.duration,
         downloadSpeed: result.speed,
-        downloadTime: `${result.downloadTime}s`
+        downloadTime: `${result.downloadTime}s`,
+        thumbnail: result.thumbnail,
+        audioQuality: result.audioInfo?.quality || '128kbps'
       },
-      expiresIn: 3600 // segundos
+      expiresIn: 3600
     });
 
   } catch (error) {
